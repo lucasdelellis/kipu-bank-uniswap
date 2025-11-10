@@ -24,8 +24,8 @@ import {IUniswapV2Factory} from "@uniswap/v2-core/contracts/interfaces/IUniswapV
 /**
  * @title KipuBank
  * @author lucasdelellis
- * @notice This contract implements a simple bank system where users can deposit and withdraw ETH and USDC.
- * @dev The contract has a maximum cap on the total ETH it can hold and a maximum withdrawal limit per transaction.
+ * @notice This contract implements a simple bank system where users can deposit wherever token that is convertible to USDC using UniswapV2 and withdraw USDC.
+ * @dev The contract has a maximum cap on the total USDC it can hold and a maximum withdrawal limit per transaction.
  */
 contract KipuBank is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -182,6 +182,15 @@ contract KipuBank is Ownable, ReentrancyGuard {
         _;
     }
 
+    /// @notice Check that the token is not USDC
+    /// @param token Token address to validate
+    modifier isNotUSDCAddress(address token) {
+        if (token == address(s_usdc)) {
+            revert KipuBank_InvalidAddress();
+        }
+        _;
+    }
+
     /// @notice Check that the amount is greater than 0
     /// @param amount Amount to validate
     modifier validAmount(uint256 amount) {
@@ -237,8 +246,42 @@ contract KipuBank is Ownable, ReentrancyGuard {
      * @dev Function to deposit ETH into the contract.
      * @param _minAmountInUSDC The minimum amount of USDC after the swap.
      */
-    function depositETH(uint256 _minAmountInUSDC) external payable nonReentrant {
+    function depositETH(
+        uint256 _minAmountInUSDC
+    ) external payable nonReentrant {
         _depositETH(msg.sender, msg.value, _minAmountInUSDC);
+    }
+
+    /**
+     * @dev Function to deposit USDC tokens into the contract.
+     * @param _amountIn The amount of token to deposit.
+     */
+    function depositUSDC(
+        uint256 _amountIn
+    ) external nonReentrant validAmount(_amountIn) {
+        // Check
+        if (_exceedsBankCap(_amountIn)) {
+            revert KipuBank_BankCapReached(
+                i_bankCap,
+                s_balanceInUSDC,
+                _amountIn
+            );
+        }
+
+        // Effects
+        s_depositCount += 1;
+        s_balances[msg.sender] += _amountIn;
+        s_balanceInUSDC += _amountIn;
+
+        // Interaction
+        s_usdc.safeTransferFrom(msg.sender, address(this), _amountIn);
+
+        emit KipuBank_DepositReceived(
+            msg.sender,
+            _amountIn,
+            address(s_usdc),
+            _amountIn
+        );
     }
 
     /**
@@ -251,7 +294,7 @@ contract KipuBank is Ownable, ReentrancyGuard {
         address _token,
         uint256 _amountIn,
         uint256 _minAmountInUSDC
-    ) external nonReentrant validTokenAddress(_token) validAmount(_amountIn) {
+    ) external nonReentrant validTokenAddress(_token) isNotUSDCAddress(_token) validAmount(_amountIn) {
         // Check
         IUniswapV2Pair pair = _getPair(_token, address(s_usdc));
         uint256 amountOutExpected = _calculateAmountOut(
@@ -334,15 +377,15 @@ contract KipuBank is Ownable, ReentrancyGuard {
      * @param _amountIn The amount of token ETH to deposit.
      * @param _minAmountInUSDC The minimum amount of USCD after the swap.
      */
-    function _depositETH(address _from, uint256 _amountIn, uint256 _minAmountInUSDC) private validAmount(_amountIn) {
+    function _depositETH(
+        address _from,
+        uint256 _amountIn,
+        uint256 _minAmountInUSDC
+    ) private validAmount(_amountIn) {
         // Check
         address weth = s_uniswapRouter.WETH();
         IUniswapV2Pair pair = _getPair(weth, address(s_usdc));
-        uint256 amountOutExpected = _calculateAmountOut(
-            pair,
-            _amountIn,
-            weth
-        );
+        uint256 amountOutExpected = _calculateAmountOut(pair, _amountIn, weth);
 
         if (amountOutExpected < _minAmountInUSDC) {
             revert KipuBank_InsufficientOutputAmount(
@@ -374,7 +417,6 @@ contract KipuBank is Ownable, ReentrancyGuard {
             amountOutExpected
         );
     }
-
 
     /**
      * @dev Function to calculate the amount of tokenOut to receive for a given amount of tokenIn.
@@ -461,7 +503,7 @@ contract KipuBank is Ownable, ReentrancyGuard {
             );
         }
     }
-    
+
     /*/////////////////////////
         View & Pure
     /////////////////////////*/
@@ -482,7 +524,14 @@ contract KipuBank is Ownable, ReentrancyGuard {
     function getAmountOutInUSDC(
         address _token,
         uint256 _amountIn
-    ) external view validTokenAddress(_token) validAmount(_amountIn) returns (uint256) {
+    )
+        external
+        view
+        validTokenAddress(_token)
+        isNotUSDCAddress(_token)
+        validAmount(_amountIn)
+        returns (uint256)
+    {
         IUniswapV2Pair pair = _getPair(_token, address(s_usdc));
         return _calculateAmountOut(pair, _amountIn, _token);
     }

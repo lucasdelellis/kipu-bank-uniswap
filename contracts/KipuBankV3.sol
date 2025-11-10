@@ -6,6 +6,7 @@ pragma solidity 0.8.30;
         Imports
 ///////////////////////*/
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
 /*///////////////////////
@@ -27,7 +28,7 @@ import {IUniswapV2Factory} from "@uniswap/v2-core/contracts/interfaces/IUniswapV
  * @notice This contract implements a simple bank system where users can deposit wherever token that is convertible to USDC using UniswapV2 and withdraw USDC.
  * @dev The contract has a maximum cap on the total USDC it can hold and a maximum withdrawal limit per transaction.
  */
-contract KipuBank is Ownable, ReentrancyGuard {
+contract KipuBank is Ownable, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     /*///////////////////////////////////
@@ -71,7 +72,7 @@ contract KipuBank is Ownable, ReentrancyGuard {
     /**
      * @dev Uniswap router contract
      */
-    IUniswapV2Router02 public s_uniswapRouter;
+    IUniswapV2Router02 public immutable s_uniswapRouter;
 
     /*///////////////////////////////////
                 Events
@@ -228,14 +229,14 @@ contract KipuBank is Ownable, ReentrancyGuard {
     /**
      * @dev Receive function to deposit ETH.
      */
-    receive() external payable {
+    receive() external payable nonReentrant whenNotPaused {
         _depositETH(msg.sender, msg.value, 0);
     }
 
     /**
      * @dev Fallback function to prevent accidental ETH transfers.
      */
-    fallback() external payable {
+    fallback() external payable nonReentrant whenNotPaused {
         _depositETH(msg.sender, msg.value, 0);
     }
 
@@ -248,7 +249,7 @@ contract KipuBank is Ownable, ReentrancyGuard {
      */
     function depositETH(
         uint256 _minAmountInUSDC
-    ) external payable nonReentrant {
+    ) external payable nonReentrant whenNotPaused {
         _depositETH(msg.sender, msg.value, _minAmountInUSDC);
     }
 
@@ -258,7 +259,7 @@ contract KipuBank is Ownable, ReentrancyGuard {
      */
     function depositUSDC(
         uint256 _amountIn
-    ) external nonReentrant validAmount(_amountIn) {
+    ) external nonReentrant whenNotPaused validAmount(_amountIn) {
         // Check
         if (_exceedsBankCap(_amountIn)) {
             revert KipuBank_BankCapReached(
@@ -294,7 +295,7 @@ contract KipuBank is Ownable, ReentrancyGuard {
         address _token,
         uint256 _amountIn,
         uint256 _minAmountInUSDC
-    ) external nonReentrant validTokenAddress(_token) isNotUSDCAddress(_token) validAmount(_amountIn) {
+    ) external nonReentrant whenNotPaused validTokenAddress(_token) isNotUSDCAddress(_token) validAmount(_amountIn) {
         // Check
         IUniswapV2Pair pair = _getPair(_token, address(s_usdc));
         uint256 amountOutExpected = _calculateAmountOut(
@@ -341,7 +342,7 @@ contract KipuBank is Ownable, ReentrancyGuard {
      * @dev Withdraw USDC from the contract.
      * @param _amount The amount of USDC to withdraw.
      */
-    function withdrawUSDC(uint256 _amount) external nonReentrant {
+    function withdrawUSDC(uint256 _amount) external nonReentrant whenNotPaused {
         if (_amount > i_maxWithdrawal) {
             revert KipuBank_TooMuchWithdrawal(i_maxWithdrawal, _amount);
         }
@@ -357,6 +358,14 @@ contract KipuBank is Ownable, ReentrancyGuard {
         s_usdc.safeTransfer(msg.sender, _amount);
 
         emit KipuBank_WithdrawalMade(msg.sender, _amount, address(s_usdc));
+    }
+
+    function pause() external onlyOwner nonReentrant {
+        _pause();
+    }
+
+    function unpause() external onlyOwner nonReentrant {
+        _unpause();
     }
 
     /*/////////////////////////
@@ -511,7 +520,7 @@ contract KipuBank is Ownable, ReentrancyGuard {
      * @dev Function to get the balance of the caller.
      * @return uint256 The balance of the caller in USDC.
      */
-    function getBalance() external view returns (uint256) {
+    function getBalance() external view whenNotPaused returns (uint256) {
         return s_balances[msg.sender];
     }
 
@@ -527,6 +536,7 @@ contract KipuBank is Ownable, ReentrancyGuard {
     )
         external
         view
+        whenNotPaused
         validTokenAddress(_token)
         isNotUSDCAddress(_token)
         validAmount(_amountIn)
